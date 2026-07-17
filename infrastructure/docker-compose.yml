@@ -1,0 +1,67 @@
+version: '3.8'
+
+# 1. Define the custom bridge network
+networks:
+  ems-network:
+    driver: bridge
+    name: ems-network
+
+services:
+  # MongoDB Database Engine
+  mongodb:
+    image: mongo:6.0
+    container_name: ems-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: event_platform
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongo-init/init.js:/docker-entrypoint-initdb.d/init.js:ro
+    # 2. Attach service to the single network
+    networks:
+      - ems-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache & Distributed Locker
+  redis:
+    image: redis:7.0-alpine
+    container_name: ems-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --loglevel warning
+    volumes:
+      - redis_data:/data
+    # 2. Attach service to the single network
+    networks:
+      - ems-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # AWS S3 Emulator (LocalStack)
+  localstack:
+    image: localstack/localstack:latest
+    container_name: ems-localstack
+    ports:
+      - "4566:4566"            # LocalStack edge port
+    environment:
+      - SERVICES=s3
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - ./localstack-init:/etc/localstack/init/ready.d
+    # 2. Attach service to the single network
+    networks:
+      - ems-network
+
+volumes:
+  mongodb_data:
+  redis_data:
+  localstack_data:
