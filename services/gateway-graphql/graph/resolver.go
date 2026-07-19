@@ -1,16 +1,16 @@
 package graph
 
 import (
-	"bytes"
 	"context"
+	"ems-platform/services/gateway-graphql/graph/model"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
 
-	"ems-platform/services/gateway-graphql/graph/model"
+	"github.com/joho/godotenv"
 )
 
 // Resolver acts as our dependency injection hub for API services.
@@ -21,6 +21,13 @@ type Resolver struct {
 }
 
 func NewResolver() *Resolver {
+	// Load the .env file
+	// By default, it looks for a file named ".env" in the current directory
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
 	// Pull service endpoints from environmental configuration
 	eventURL := os.Getenv("EVENT_SERVICE_URL")
 	if eventURL == "" {
@@ -41,11 +48,11 @@ func NewResolver() *Resolver {
 	}
 }
 
-// ----------------------------------------------------
-// QUERY RESOLVER: Get Active Events
-// ----------------------------------------------------
+// // ----------------------------------------------------
+// // QUERY RESOLVER: Get Active Events
+// // ----------------------------------------------------
 
-func (r *Resolver) Query_GetEvents(ctx context.Context) ([]*model.Event, error) {
+func (r *Resolver) Events(ctx context.Context) ([]*model.Event, error) {
 	reqUrl := fmt.Sprintf("%s/events", r.EventServiceURL)
 
 	req, err := http.NewRequestWithContext(ctx, "GET", reqUrl, nil)
@@ -69,60 +76,4 @@ func (r *Resolver) Query_GetEvents(ctx context.Context) ([]*model.Event, error) 
 	}
 
 	return events, nil
-}
-
-// ----------------------------------------------------
-// MUTATION RESOLVER: Create Booking
-// ----------------------------------------------------
-
-// BookingRequestPayload defines the JSON object format expected by the booking microservice
-type BookingRequestPayload struct {
-	EventID string `json:"eventId"`
-	UserID  string `json:"userId"`
-	Seats   int    `json:"seats"`
-}
-
-func (r *Resolver) Mutation_CreateBooking(ctx context.Context, eventID string, userID string, seats int) (*model.Booking, error) {
-	reqUrl := fmt.Sprintf("%s/book", r.BookingServiceURL)
-
-	// Build the transaction request payload
-	payload := BookingRequestPayload{
-		EventID: eventID,
-		UserID:  userID,
-		Seats:   seats,
-	}
-
-	jsonData, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request payload: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", reqUrl, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := r.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to reach booking service: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Handle downstream business errors gracefully (e.g., locking conflicts or out of stock)
-	if resp.StatusCode != http.StatusCreated {
-		var errorResponse map[string]string
-		_ = json.NewDecoder(resp.Body).Decode(&errorResponse)
-		if msg, exists := errorResponse["error"]; exists {
-			return nil, errors.New(msg)
-		}
-		return nil, fmt.Errorf("booking service rejected transaction with status: %d", resp.StatusCode)
-	}
-
-	var booking model.Booking
-	if err := json.NewDecoder(resp.Body).Decode(&booking); err != nil {
-		return nil, fmt.Errorf("failed to decode booking details: %w", err)
-	}
-
-	return &booking, nil
 }

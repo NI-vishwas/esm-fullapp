@@ -1,133 +1,91 @@
 package handlers
 
 import (
-	"encoding/json"
-	"net/http"
-	"time"
-
-	"ems-platform/services/service-booking/database"
-	"ems-platform/services/service-booking/models"
-	"ems-platform/services/service-booking/storage"
-	"ems-platform/services/service-booking/ticket"
-
-	"github.com/google/uuid"
+    "context"
+    "encoding/json"
+    "net/http"
+    "time"
 )
 
-// BookingRequest defines the payload structure incoming from our GraphQL gateway
+// 🔌 DECOUPLED INTERFACES
+type Locker interface {
+    Lock(ctx context.Context, resourceKey string, ttl time.Duration) (string, error)
+    Unlock(ctx context.Context, resourceKey string, token string) error
+}
+
+// Relational database operations (MySQL)
+type BookingRepository interface {
+    SaveBooking(ctx context.Context, eventID, userID string, seats int) (string, error)
+}
+
+// Object storage operations (S3)
+type DocumentStorage interface {
+    UploadTicketPDF(ctx context.Context, bookingID string, pdfBytes []byte) (string, error)
+}
+
+// 📦 HANDLER CORE
 type BookingRequest struct {
-	EventID string `json:"eventId"`
-	UserID  string `json:"userId"`
-	Seats   int    `json:"seats"`
+    EventID string `json:"eventId"`
+    UserID  string `json:"userId"`
+    Seats   int    `json:"seats"`
 }
 
-// BookingResponse defines what we return back to the gateway on success
-type BookingResponse struct {
-	ID           string `json:"id"`
-	EventID      string `json:"eventId"`
-	UserID       string `json:"userId"`
-	SeatsCount   int    `json:"seatsCount"`
-	Status       string `json:"status"`
-	TicketPdfURL string `json:"ticketPdfUrl"`
-}
-
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
-// BookingHandler orchestrates database, PDF generation, and S3 storage
 type BookingHandler struct {
-	Storage *storage.S3Storage
+    DB      BookingRepository // MySQL
+    S3      DocumentStorage    // S3
+    Locker  Locker
 }
 
-func NewBookingHandler(store *storage.S3Storage) *BookingHandler {
-	return &BookingHandler{
-		Storage: store,
-	}
+// Pass both storage dependencies into the constructor
+func NewBookingHandler(db BookingRepository, s3 DocumentStorage, locker Locker) *BookingHandler {
+    return &BookingHandler{
+        DB:     db,
+        S3:     s3,
+        Locker: locker,
+    }
 }
 
 func (h *BookingHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
-	// 1. Only allow POST requests
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
-		return
-	}
+    var req BookingRequest
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        w.WriteHeader(http.StatusBadRequest)
+        json.NewEncoder(w).Encode(map[string]string{"error": "Invalid request body"})
+        return
+    }
 
-	// 2. Decode incoming payload
-	var req BookingRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid request body")
-		return
-	}
+    if req.EventID == "" || req.UserID == "" || req.Seats <= 0 {
+        w.WriteHeader(http.StatusUnprocessableEntity)
+        json.NewEncoder(w).Encode(map[string]string{"error": "Missing required fields"})
+        return
+    }
 
-	// Validate inputs
-	if req.EventID == "" || req.UserID == "" || req.Seats <= 0 {
-		writeError(w, http.StatusUnprocessableEntity, "eventId, userId, and a positive seats count are required")
-		return
-	}
+    // Acquire lock
+    lockKey := "event:" + req.EventID + ":allocation"
+    token, err := h.Locker.Lock(r.Context(), lockKey, 5*time.Second)
+    if err != nil {
+        w.WriteHeader(http.StatusConflict)
+        json.NewEncoder(w).Encode(map[string]string{"error": "High traffic, try again"})
+        return
+    }
+    defer h.Locker.Unlock(r.Context(), lockKey, token)
 
-	// Generate a unique ID for this transaction
-	bookingID := uuid.New().String()
+    // 1. Save metadata to MySQL
+    bookingID, err := h.DB.SaveBooking(r.Context(), req.EventID, req.UserID, req.Seats)
+    if err != nil {
+        w.WriteHeader(http.StatusInternalServerError)
+        json.NewEncoder(w).Encode(map[string]string{"error": "Database error"})
+        return
+    }
 
-	// 3. (Mock step) Fetch Event Meta
-	// In a real system, you would call service-event over gRPC/HTTP to get the actual event name and price.
-	// For this unified workflow, we'll mock the event data.
-	eventTitle := "Global Developers Summit 2026"
-	eventTime := time.Date(2026, time.September, 15, 9, 0, 0, 0, time.UTC)
-	userName := "Developer Attendee" // In reality, pulled from auth context/user service
+    // 2. OPTIONAL/NEXT STEP: Generate PDF bytes here...
+    // dummyPdfBytes := []byte("%PDF-1.4 ...") 
+    // pdfURL, err := h.S3.UploadTicketPDF(r.Context(), bookingID, dummyPdfBytes)
 
-	// 4. Generate the Ticket PDF in memory
-	pdfBytes, err := ticket.GenerateTicketPDF(ticket.TicketData{
-		BookingID:   bookingID,
-		EventTitle:  eventTitle,
-		EventDate:   eventTime,
-		UserName:    userName,
-		SeatsCount:  req.Seats,
-		TicketPrice: 99.00, // Mock price
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to generate ticket PDF")
-		return
-	}
-
-	// 5. Upload PDF to S3 Storage
-	pdfURL, err := h.Storage.UploadTicketPDF(r.Context(), bookingID, pdfBytes)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "Failed to store ticket PDF")
-		return
-	}
-
-	// 6. Save Booking Record to PostgreSQL via GORM
-	booking := models.Booking{
-		ID:           bookingID,
-		EventID:      req.EventID,
-		UserID:       req.UserID,
-		SeatsCount:   req.Seats,
-		Status:       "CONFIRMED",
-		TicketPdfURL: pdfURL,
-	}
-
-	// Perform an atomic DB insert
-	if err := database.DB.Create(&booking).Error; err != nil {
-		writeError(w, http.StatusInternalServerError, "Database write failure: "+err.Error())
-		return
-	}
-
-	// 7. Write JSON Response to Gateway
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(BookingResponse{
-		ID:           booking.ID,
-		EventID:      booking.EventID,
-		UserID:       booking.UserID,
-		SeatsCount:   booking.SeatsCount,
-		Status:       booking.Status,
-		TicketPdfURL: booking.TicketPdfURL,
-	})
-}
-
-// Helper function to write standardized JSON error structures
-func writeError(w http.ResponseWriter, statusCode int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(ErrorResponse{Error: message})
+    w.WriteHeader(http.StatusCreated)
+    json.NewEncoder(w).Encode(map[string]string{
+        "id":      bookingID,
+        "status":  "CONFIRMED",
+        "eventId": req.EventID,
+        // "ticketUrl": pdfURL, // You can return this to the client once PDF generation is wired up!
+    })
 }

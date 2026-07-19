@@ -53,3 +53,37 @@ func (r *MongoRepository) GetAllEvents(ctx context.Context) ([]models.Event, err
 
 	return events, nil
 }
+
+func (r *MongoRepository) GetEventByID(ctx context.Context, eventID string) (*models.Event, error) {
+	collection := r.DB.Collection("events")
+
+	filter := bson.M{"_id": eventID}
+	
+	var event models.Event
+	err := collection.FindOne(ctx, filter).Decode(&event)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil // No event found
+		}
+		return nil, err
+	}
+
+	return &event, nil
+}
+
+func (r *MongoRepository) CreateEvent(ctx context.Context, event models.Event) error {
+	collection := r.DB.Collection("events")
+	
+	_, err := collection.InsertOne(ctx, event)
+	return err
+}
+
+func (r *MongoRepository) UpdateEvent(ctx context.Context, eventID string, update bson.M) error {
+	collection := r.DB.Collection("events")
+	
+	filter := bson.M{"_id": eventID}
+	updateDoc := bson.M{"$set": update}
+	_, err := collection.UpdateOne(ctx, filter, updateDoc)
+	return err
+}
+

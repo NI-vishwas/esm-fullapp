@@ -11,7 +11,7 @@ type Event struct {
 	Title       string             `bson:"title" json:"title"`
 	Description string             `bson:"description" json:"description"`
 	Slug        string             `bson:"slug" json:"slug"`
-	Status      string             `bson:"status" json:"status"`
+	Status      string             `bson:"status" json:"status"` // e.g. active, inactive, canceled, 
 	Date        time.Time          `bson:"date" json:"date"`
 	Venue       VenueInfo          `bson:"venue" json:"venue"`
 	Inventory   InventoryInfo      `bson:"inventory" json:"inventory"`

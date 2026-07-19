@@ -11,7 +11,7 @@ type Booking struct {
 	ID           string         `gorm:"primaryKey;type:varchar(64)" json:"id"`
 	EventID      string         `gorm:"index;not null;type:varchar(64)" json:"eventId"`
 	UserID       string         `gorm:"not null;type:varchar(64)" json:"userId"`
-	SeatsCount   int            `gorm:"not null;type:integer;default:1" json:"seatsCount"`
+	Seats        int            `gorm:"not null;type:integer;default:1" json:"seatsCount"`
 	Status       string         `gorm:"type:varchar(32);default:'CONFIRMED'" json:"status"` // e.g. PENDING, CONFIRMED, CANCELLED
 	TicketPdfURL string         `gorm:"type:text" json:"ticketPdfUrl"`
 	CreatedAt    time.Time      `json:"createdAt"`

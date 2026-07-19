@@ -9,9 +9,17 @@ import (
 	"time"
 
 	"ems-platform/services/service-event/db"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load the .env file
+	// By default, it looks for a file named ".env" in the current directory
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+	
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -24,9 +32,9 @@ func main() {
 	// 2. Initialize Database Connection
 	repo, err := db.NewMongoRepository(ctx, mongoURI, "event_platform")
 	if err != nil {
-		log.Fatalf("❌ Failed to connect to MongoDB: %v", err)
+		log.Fatalf("Failed to connect to MongoDB: %v", err)
 	}
-	log.Println("🔌 Successfully connected to MongoDB container.")
+	log.Println("Successfully connected to MongoDB container.")
 
 	// 3. Define HTTP handler to serve the catalog
 	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
@@ -46,6 +54,6 @@ func main() {
 	if port == "" {
 		port = "8081"
 	}
-	log.Printf("🚀 Event Service running on port %s", port)
+	log.Printf("Event Service running on port %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }

@@ -1,0 +1,60 @@
+# GraphQL schema example
+#
+# https://gqlgen.com/getting-started/
+
+type Event {
+  id: ID!
+  title: String!
+  description: String!
+  slug: String!
+  status: String!
+  date: DateTime!
+  venue: VenueInfo!
+  inventory: InventoryInfo!
+  bannerUrl: String!
+  createdAt: DateTime!
+}
+
+type VenueInfo {
+  name: String!
+  address: String!
+}
+
+type InventoryInfo {
+  totalSlots: Int!
+  availableSlots: Int!
+}
+
+input NewEvent {
+  title: String!
+  description: String!
+  slug: String!
+  status: String!
+  date: DateTime!
+  venue: VenueInfoInput!
+  inventory: InventoryInfoInput!
+  bannerUrl: String!
+}
+
+input VenueInfoInput {
+  name: String!
+  address: String!
+}
+
+input InventoryInfoInput {
+  totalSlots: Int!
+  availableSlots: Int!
+}
+
+extend type Query {
+  events: [Event!]!
+  event(id: ID!): Event
+}
+
+extend type Mutation {
+  createEvent(input: NewEvent!): Event!
+  updateEvent(id: ID!, input: NewEvent!): Event!
+  deleteEvent(id: ID!): Boolean!
+}
+
+scalar DateTime

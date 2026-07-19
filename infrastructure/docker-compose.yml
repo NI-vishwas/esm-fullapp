@@ -1,14 +1,14 @@
 version: '3.8'
 
 # 1. Define the custom bridge network
-networks:
-  ems-network:
-    driver: bridge
-    name: ems-network
+# networks:
+#   ems-network:
+#     driver: bridge
+#     name: ems-network
 
 services:
-  # MongoDB Database Engine
-  mongodb:
+  # MongoDB (Used by Event Service)
+  ems-mongodb:
     image: mongo:6.0
     container_name: ems-mongodb
     ports:
@@ -18,17 +18,36 @@ services:
     volumes:
       - mongodb_data:/data/db
       - ./mongo-init/init.js:/docker-entrypoint-initdb.d/init.js:ro
-    # 2. Attach service to the single network
-    networks:
-      - ems-network
+    # networks:
+    #   - ems-network
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
       retries: 5
 
+  # PostgreSQL (Used by Booking Service + GORM)
+  ems-postgres:
+    image: postgres:15-alpine
+    container_name: ems-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: booking_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # networks:
+    #   - ems-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # Redis Cache & Distributed Locker
-  redis:
+  ems-redis:
     image: redis:7.0-alpine
     container_name: ems-redis
     ports:
@@ -36,9 +55,8 @@ services:
     command: redis-server --loglevel warning
     volumes:
       - redis_data:/data
-    # 2. Attach service to the single network
-    networks:
-      - ems-network
+    # networks:
+    #   - ems-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -46,7 +64,7 @@ services:
       retries: 5
 
   # AWS S3 Emulator (LocalStack)
-  localstack:
+  ems-localstack:
     image: localstack/localstack:latest
     container_name: ems-localstack
     ports:
@@ -54,14 +72,84 @@ services:
     environment:
       - SERVICES=s3
       - AWS_DEFAULT_REGION=us-east-1
+      - LOCALSTACK_AUTH_TOKEN=ls-TIPusoRA-yONU-huJo-Xohu-78179504e614
     volumes:
       - localstack_data:/var/lib/localstack
       - ./localstack-init:/etc/localstack/init/ready.d
-    # 2. Attach service to the single network
-    networks:
-      - ems-network
+    # networks:
+    #   - ems-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ==========================================
+  # GO MICROSERVICES
+  # ==========================================
+
+  # Microservice: Event Service (Connects to MongoDB & Redis)
+  ems-event-service:
+    build:
+      context: ../services/service-event
+      dockerfile: Dockerfile
+    container_name: ems-event-service
+    ports:
+      - "8081:8081"
+    environment:
+      - MONGO_URI=mongodb://ems-mongodb:27017/event_platform
+      - REDIS_URL=redis://ems-redis:6379
+    depends_on:
+      ems-mongodb:
+        condition: service_healthy
+      ems-redis:
+        condition: service_healthy
+    # networks:
+    #   - ems-network
+
+  # Microservice: Booking Service (Connects to PostgreSQL & LocalStack S3)
+  ems-booking-service:
+    build:
+      context: ../services/service-booking
+      dockerfile: Dockerfile
+    container_name: ems-booking-service
+    ports:
+      - "8082:8082"
+    environment:
+      # Connects using the Postgres parameters matching our database service above
+      - DATABASE_URL=postgres://postgres:postgres@ems-postgres:5432/booking_db?sslmode=disable
+      - AWS_S3_BUCKET=ems-tickets-bucket
+      - AWS_REGION=us-east-1
+      - AWS_S3_ENDPOINT=http://ems-localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+    depends_on:
+      ems-postgres:
+        condition: service_healthy
+      ems-localstack:
+        condition: service_healthy
+    # networks:
+    #   - ems-network
+
+  # Gateway: GraphQL Gateway (React Entry point)
+  ems-gateway-graphql:
+    build:
+      context: ../services/gateway-graphql
+      dockerfile: Dockerfile
+    container_name: ems-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - EVENT_SERVICE_URL=http://ems-event-service:8081
+      - BOOKING_SERVICE_URL=http://ems-booking-service:8082
+    depends_on:
+      - ems-event-service
+      - ems-booking-service
+    # networks:
+    #   - ems-network
 
 volumes:
   mongodb_data:
+  postgres_data:   # Persistent volume for GORM database
   redis_data:
   localstack_data:
