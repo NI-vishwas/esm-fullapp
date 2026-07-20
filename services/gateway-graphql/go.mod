@@ -9,6 +9,8 @@ require (
 	github.com/vektah/gqlparser/v2 v2.5.36
 )
 
+require github.com/rs/cors v1.11.1 // indirect
+
 require (
 	github.com/agnivade/levenshtein v1.2.1 // indirect
 	github.com/coder/websocket v1.8.15 // indirect

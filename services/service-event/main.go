@@ -2,13 +2,15 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
 	"os"
 	"time"
 
 	"ems-platform/services/service-event/db"
+	"ems-platform/services/service-event/models"
+
+	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 )
 
@@ -19,7 +21,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Error loading .env file")
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -37,16 +39,32 @@ func main() {
 	log.Println("Successfully connected to MongoDB container.")
 
 	// 3. Define HTTP handler to serve the catalog
-	http.HandleFunc("/events", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	router := gin.Default()
 
-		events, err := repo.GetAllEvents(r.Context())
+	// GET /events - Fetch all events
+	router.GET("/events", func(c *gin.Context) {
+		events, err := repo.GetAllEvents(c.Request.Context())
 		if err != nil {
-			http.Error(w, `{"error": "Failed to fetch events"}`, http.StatusInternalServerError)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to fetch events"})
+			return
+		}
+		c.JSON(http.StatusOK, events)
+	})
+
+	// POST /events - Add a new event
+	router.POST("/events", func(c *gin.Context) {
+		var newEvent models.Event
+		if err := c.ShouldBindJSON(&newEvent); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request payload"})
 			return
 		}
 
-		json.NewEncoder(w).Encode(events)
+		if err := repo.CreateEvent(c.Request.Context(), newEvent); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add event"})
+			return
+		}
+
+		c.JSON(http.StatusCreated, newEvent)
 	})
 
 	// 4. Start Server
@@ -55,5 +73,5 @@ func main() {
 		port = "8081"
 	}
 	log.Printf("Event Service running on port %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(router.Run(":" + port))
 }
